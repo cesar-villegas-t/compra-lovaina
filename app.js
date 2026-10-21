@@ -1,7 +1,6 @@
 const STORE_KEY = 'autolisting.v1';
 let items = load();
-let view = 'lista';
-let editing = false;
+let view = 'home';
 let query = '';
 
 function load() {
@@ -27,7 +26,6 @@ function save() {
 }
 
 const $ = (sel) => document.querySelector(sel);
-const catName = (id) => (CATEGORIES.find((c) => c.id === id) || {}).name || id;
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -36,144 +34,136 @@ function el(tag, cls, text) {
   return n;
 }
 
-function itemRow(it, onTap, state) {
-  const row = el('button', 'item ' + (state || ''));
-  row.type = 'button';
-  const names = el('span', 'names');
-  names.append(el('span', 'es', it.es));
-  if (it.nl && it.nl.toLowerCase() !== it.es.toLowerCase()) names.append(el('span', 'nl', it.nl));
-  row.append(names, el('span', 'mark', state === 'checked' ? '✓' : state === 'in' ? '＋' : ''));
-  row.addEventListener('click', onTap);
-  return row;
+function button(cls, text, onClick) {
+  const b = el('button', cls, text);
+  b.type = 'button';
+  b.addEventListener('click', onClick);
+  return b;
 }
 
-function renderList() {
-  const root = $('#content');
-  root.replaceChildren();
-  const need = items.filter((i) => i.need && !i.done);
-  const done = items.filter((i) => i.need && i.done);
+function go(next) {
+  view = next;
+  query = '';
+  render();
+  window.scrollTo(0, 0);
+}
 
-  if (!need.length && !done.length) {
-    root.append(el('p', 'empty', 'La lista está vacía. Ve a «Catálogo» y toca lo que necesites.'));
+function renderHome(root) {
+  const needed = items.filter((i) => i.need);
+
+  const panel = el('section', 'panel');
+  const head = el('div', 'panel-head');
+  head.append(el('h2', null, 'Mi lista'), el('span', 'count', needed.length ? String(needed.length) : ''));
+  const scroll = el('div', 'panel-scroll');
+
+  if (!needed.length) {
+    scroll.append(el('p', 'empty', 'Aún no hay nada en la lista.\nToca «Editar» para añadir productos.'));
   }
-
-  for (const c of CATEGORIES.concat([{ id: 'otros', name: 'Otros' }])) {
-    const group = need.filter((i) => i.cat === c.id);
+  for (const c of CATEGORIES) {
+    const group = needed.filter((i) => i.cat === c.id);
     if (!group.length) continue;
-    root.append(el('h2', null, c.name));
-    for (const it of group) {
-      root.append(itemRow(it, () => { it.done = true; commit(); }, 'todo'));
-    }
+    scroll.append(el('h3', null, c.name));
+    const chips = el('div', 'chips');
+    for (const it of group) chips.append(el('span', 'chip', it.es));
+    scroll.append(chips);
   }
 
-  if (done.length) {
-    root.append(el('h2', 'done-h', 'Comprado (' + done.length + ')'));
-    for (const it of done) {
-      root.append(itemRow(it, () => { it.done = false; commit(); }, 'checked'));
-    }
-    const btn = el('button', 'primary', 'Nueva compra (vaciar comprados)');
-    btn.type = 'button';
-    btn.addEventListener('click', () => {
-      for (const it of items) if (it.done) { it.need = false; it.done = false; }
-      commit();
-    });
-    root.append(btn);
-  }
+  panel.append(head, scroll, button('fab', '✎ Editar', () => go('edit')));
+  root.append(panel, button('buy', '🛒 Compra', () => go('shop')));
 }
 
-function renderCatalog() {
-  const root = $('#content');
-  root.replaceChildren();
-
+function renderEdit(root) {
   const bar = el('div', 'bar');
   const search = el('input');
   search.type = 'search';
   search.placeholder = 'Buscar (es / nl)…';
   search.value = query;
-  search.addEventListener('input', () => { query = search.value; renderCatalogList(); });
-  const editBtn = el('button', 'ghost', editing ? 'Listo' : 'Editar');
-  editBtn.type = 'button';
-  editBtn.addEventListener('click', () => { editing = !editing; render(); });
-  bar.append(search, editBtn);
+  search.addEventListener('input', () => { query = search.value; renderEditList(); });
+  bar.append(search);
   root.append(bar);
 
-  const add = el('form', 'add');
-  const es = el('input'); es.placeholder = 'Nuevo producto (es)'; es.required = true;
+  const add = el('details', 'add');
+  add.append(el('summary', null, '＋ Producto nuevo'));
+  const form = el('form');
+  const es = el('input'); es.placeholder = 'Nombre (es)'; es.required = true;
   const nl = el('input'); nl.placeholder = 'Nederlands (opcional)';
   const sel = el('select');
   for (const c of CATEGORIES) {
     const o = el('option', null, c.name); o.value = c.id; sel.append(o);
   }
-  const go = el('button', 'primary', 'Añadir al catálogo y a la lista');
-  go.type = 'submit';
-  add.append(es, nl, sel, go);
-  add.addEventListener('submit', (e) => {
+  const submit = el('button', 'primary', 'Añadir a la lista');
+  submit.type = 'submit';
+  form.append(es, nl, sel, submit);
+  form.addEventListener('submit', (e) => {
     e.preventDefault();
     const name = es.value.trim();
     if (!name) return;
     items.push({ id: 'u-' + Date.now(), es: name, nl: nl.value.trim(), cat: sel.value, need: true, done: false, custom: true });
-    commit();
+    save();
+    render();
   });
+  add.append(form);
   root.append(add);
 
-  const listBox = el('div');
-  listBox.id = 'cat-list';
-  root.append(listBox);
-  renderCatalogList();
+  const box = el('div');
+  box.id = 'edit-list';
+  root.append(box);
+  renderEditList();
 }
 
-function renderCatalogList() {
-  const box = $('#cat-list');
-  if (!box) return;
+function renderEditList() {
+  const box = $('#edit-list');
   box.replaceChildren();
   const q = query.trim().toLowerCase();
   for (const c of CATEGORIES) {
     const group = items.filter((i) =>
       i.cat === c.id && (!q || i.es.toLowerCase().includes(q) || (i.nl || '').toLowerCase().includes(q)));
     if (!group.length) continue;
-    box.append(el('h2', null, c.name));
-    for (const it of group) {
-      if (editing) {
-        const row = itemRow(it, () => {
-          if (confirm('¿Quitar «' + it.es + '» del catálogo?')) {
-            items = items.filter((x) => x !== it);
-            commit();
-          }
-        }, 'edit');
-        row.querySelector('.mark').textContent = '🗑';
-        box.append(row);
-      } else {
-        const state = it.need ? 'in' : '';
-        const row = itemRow(it, () => {
-          it.need = !it.need;
-          it.done = false;
-          commit();
-        }, state);
-        if (it.need) row.querySelector('.mark').textContent = '✓ en lista';
-        box.append(row);
-      }
-    }
+    box.append(el('h3', null, c.name));
+    for (const it of group) box.append(editRow(it));
   }
   if (!box.children.length) box.append(el('p', 'empty', 'Nada encontrado.'));
 }
 
+function editRow(it) {
+  const row = el('button', 'item' + (it.need ? ' in' : ''));
+  row.type = 'button';
+  const names = el('span', 'names');
+  names.append(el('span', 'es', it.es));
+  if (it.nl && it.nl.toLowerCase() !== it.es.toLowerCase()) names.append(el('span', 'nl', it.nl));
+  const mark = el('span', 'mark', it.need ? '✓' : '＋');
+  row.append(names, mark);
+  row.addEventListener('click', () => {
+    it.need = !it.need;
+    it.done = false;
+    save();
+    row.classList.toggle('in', it.need);
+    mark.textContent = it.need ? '✓' : '＋';
+    $('#title').textContent = editTitle();
+  });
+  return row;
+}
+
+function editTitle() {
+  return 'Editar lista · ' + items.filter((i) => i.need).length;
+}
+
+function renderShop(root) {
+  root.append(el('p', 'empty', 'La pantalla de compra llegará más adelante.'));
+}
+
 function render() {
-  document.querySelectorAll('nav button').forEach((b) =>
-    b.classList.toggle('active', b.dataset.view === view));
-  const pending = items.filter((i) => i.need && !i.done).length;
-  $('#badge').textContent = pending ? String(pending) : '';
-  if (view === 'lista') renderList(); else renderCatalog();
+  const root = $('#content');
+  root.replaceChildren();
+  root.className = view;
+  $('#back').hidden = view === 'home';
+  $('#title').textContent = view === 'edit' ? editTitle() : view === 'shop' ? 'Compra' : 'Compra Lovaina';
+  if (view === 'home') renderHome(root);
+  else if (view === 'edit') renderEdit(root);
+  else renderShop(root);
 }
 
-function commit() {
-  save();
-  const y = window.scrollY;
-  render();
-  window.scrollTo(0, y);
-}
-
-document.querySelectorAll('nav button').forEach((b) =>
-  b.addEventListener('click', () => { view = b.dataset.view; editing = false; render(); window.scrollTo(0, 0); }));
+$('#back').addEventListener('click', () => go('home'));
 
 render();
 
