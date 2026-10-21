@@ -1,4 +1,4 @@
-const CACHE = 'autolisting-v3';
+const CACHE = 'autolisting-v4';
 const FILES = ['./', 'index.html', 'style.css', 'catalog.js', 'app.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {

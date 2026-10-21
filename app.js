@@ -2,6 +2,7 @@ const STORE_KEY = 'autolisting.v1';
 let items = load();
 let view = 'home';
 let query = '';
+let enter = false;
 
 const TRIP_KEY = 'autolisting.trip.v1';
 let trip = loadTrip();
@@ -9,20 +10,9 @@ let shopMode = 'card';
 let summary = null;
 let slide = '';
 let lastTap = 0;
+let lastProgress = 0;
 let toastTimer = null;
 let wakeLock = null;
-
-function loadTrip() {
-  try {
-    const t = JSON.parse(localStorage.getItem(TRIP_KEY));
-    if (t && Array.isArray(t.bought) && Array.isArray(t.postponed)) return t;
-  } catch (e) {}
-  return { bought: [], postponed: [], cursor: null };
-}
-
-function saveTrip() {
-  try { localStorage.setItem(TRIP_KEY, JSON.stringify(trip)); } catch (e) {}
-}
 
 function load() {
   try {
@@ -46,7 +36,41 @@ function save() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(items)); } catch (e) {}
 }
 
+function loadTrip() {
+  try {
+    const t = JSON.parse(localStorage.getItem(TRIP_KEY));
+    if (t && Array.isArray(t.bought) && Array.isArray(t.postponed)) return t;
+  } catch (e) {}
+  return { bought: [], postponed: [], cursor: null };
+}
+
+function saveTrip() {
+  try { localStorage.setItem(TRIP_KEY, JSON.stringify(trip)); } catch (e) {}
+}
+
+// ---- Utilidades de interfaz ----
+
 const $ = (sel) => document.querySelector(sel);
+
+const ICONS = {
+  chevron: '<path d="M15 5l-7 7 7 7"/>',
+  down: '<path d="M6 9l6 6 6-6"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  pencil: '<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/>',
+  cart: '<circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M3 4h2.5l2.2 11h10.6l2-8H6.4"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
+  list: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+};
+
+function icon(name) {
+  const s = document.createElement('span');
+  s.className = 'ico';
+  s.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>';
+  return s;
+}
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -55,11 +79,39 @@ function el(tag, cls, text) {
   return n;
 }
 
-function button(cls, text, onClick) {
-  const b = el('button', cls, text);
+function button(cls, text, onClick, iconName) {
+  const b = el('button', cls);
   b.type = 'button';
+  if (iconName) b.append(icon(iconName));
+  if (text) b.append(el('span', null, text));
   b.addEventListener('click', onClick);
   return b;
+}
+
+const catOf = (id) => CATEGORIES.find((c) => c.id === id) || { id, name: 'Otros', icon: '🛒', hue: 150 };
+
+function tinted(node, cat) {
+  node.style.setProperty('--h', cat.hue);
+  return node;
+}
+
+function namesOf(it) {
+  const names = el('span', 'names');
+  names.append(el('span', 'es', it.es));
+  if (it.nl && it.nl.toLowerCase() !== it.es.toLowerCase()) names.append(el('span', 'nl', it.nl));
+  return names;
+}
+
+function toggleDot(on) {
+  const t = el('span', 'toggle');
+  t.append(icon(on ? 'check' : 'plus'));
+  return t;
+}
+
+function popIn(node) {
+  node.classList.remove('pop');
+  void node.offsetWidth;
+  node.classList.add('pop');
 }
 
 function go(next) {
@@ -68,56 +120,88 @@ function go(next) {
   shopMode = 'card';
   summary = null;
   slide = '';
+  enter = true;
   hideToast();
   if (next === 'shop') acquireWake(); else releaseWake();
   render();
   window.scrollTo(0, 0);
 }
 
+function today() {
+  const d = new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+  return d.charAt(0).toUpperCase() + d.slice(1);
+}
+
+// ---- Inicio ----
+
 function renderHome(root) {
   const needed = items.filter((i) => i.need);
 
+  const large = el('div', 'large');
+  large.append(el('p', 'eyebrow', 'Lovaina · ' + today()), el('h1', null, 'Mi compra'));
+
   const panel = el('section', 'panel');
   const head = el('div', 'panel-head');
-  head.append(el('h2', null, 'Mi lista'), el('span', 'count', needed.length ? String(needed.length) : ''));
+  head.append(el('h2', null, 'En la lista'), el('span', 'count', needed.length ? String(needed.length) : ''));
   const scroll = el('div', 'panel-scroll');
 
   if (!needed.length) {
-    scroll.append(el('p', 'empty', 'Aún no hay nada en la lista.\nToca «Editar» para añadir productos.'));
+    const empty = el('div', 'empty-state');
+    const hero = el('div', 'hero soft');
+    hero.append(icon('cart'));
+    empty.append(hero, el('h3', null, 'Tu lista está vacía'), el('p', null, 'Toca «Editar» para añadir productos.'));
+    scroll.append(empty);
   }
   for (const c of CATEGORIES) {
     const group = needed.filter((i) => i.cat === c.id);
     if (!group.length) continue;
-    scroll.append(el('h3', null, c.name));
+    const wrap = tinted(el('div', 'cat'), c);
+    const label = el('div', 'cat-label');
+    label.append(el('span', 'dot', c.icon), el('span', null, c.name));
     const chips = el('div', 'chips');
     for (const it of group) chips.append(el('span', 'chip', it.es));
-    scroll.append(chips);
+    wrap.append(label, chips);
+    scroll.append(wrap);
   }
 
-  panel.append(head, scroll, button('fab', '✎ Editar', () => go('edit')));
-  root.append(panel, button('buy', trip.bought.length || trip.postponed.length ? '🛒 Continuar compra' : '🛒 Compra', () => go('shop')));
+  panel.append(head, scroll, button('fab', 'Editar', () => go('edit'), 'pencil'));
+  const active = trip.bought.length || trip.postponed.length;
+  root.append(large, panel,
+    button('btn primary buy', active ? 'Continuar compra' : 'Compra', () => go('shop'), 'cart'));
 }
 
+// ---- Edición ----
+
 function renderEdit(root) {
-  const bar = el('div', 'bar');
-  const search = el('input');
-  search.type = 'search';
-  search.placeholder = 'Buscar (es / nl)…';
-  search.value = query;
-  search.addEventListener('input', () => { query = search.value; renderEditList(); });
+  const large = el('div', 'large');
+  large.append(el('h1', null, 'Editar lista'), el('p', 'sub'));
+  large.lastChild.id = 'edit-count';
+  root.append(large);
+
+  const bar = el('div', 'searchbar');
+  const search = el('label', 'search');
+  const input = el('input');
+  input.type = 'search';
+  input.placeholder = 'Buscar en español o neerlandés';
+  input.value = query;
+  input.addEventListener('input', () => { query = input.value; renderEditList(); });
+  search.append(icon('search'), input);
   bar.append(search);
   root.append(bar);
 
   const add = el('details', 'add');
-  add.append(el('summary', null, '＋ Producto nuevo'));
+  const summ = el('summary');
+  const plus = toggleDot(false);
+  summ.append(plus, el('span', null, 'Producto nuevo'));
+  add.append(summ);
   const form = el('form');
-  const es = el('input'); es.placeholder = 'Nombre (es)'; es.required = true;
+  const es = el('input'); es.placeholder = 'Nombre'; es.required = true;
   const nl = el('input'); nl.placeholder = 'Nederlands (opcional)';
   const sel = el('select');
   for (const c of CATEGORIES) {
-    const o = el('option', null, c.name); o.value = c.id; sel.append(o);
+    const o = el('option', null, c.icon + '  ' + c.name); o.value = c.id; sel.append(o);
   }
-  const submit = el('button', 'primary', 'Añadir a la lista');
+  const submit = el('button', 'btn primary wide', 'Añadir a la lista');
   submit.type = 'submit';
   form.append(es, nl, sel, submit);
   form.addEventListener('submit', (e) => {
@@ -135,6 +219,13 @@ function renderEdit(root) {
   box.id = 'edit-list';
   root.append(box);
   renderEditList();
+  updateEditCount();
+}
+
+function updateEditCount() {
+  const n = items.filter((i) => i.need).length;
+  const c = $('#edit-count');
+  if (c) c.textContent = n === 0 ? 'Toca un producto para añadirlo' : n === 1 ? '1 producto en la lista' : n + ' productos en la lista';
 }
 
 function renderEditList() {
@@ -142,44 +233,41 @@ function renderEditList() {
   box.replaceChildren();
   const q = query.trim().toLowerCase();
   for (const c of CATEGORIES) {
-    const group = items.filter((i) =>
+    const list = items.filter((i) =>
       i.cat === c.id && (!q || i.es.toLowerCase().includes(q) || (i.nl || '').toLowerCase().includes(q)));
-    if (!group.length) continue;
-    box.append(el('h3', null, c.name));
-    for (const it of group) box.append(editRow(it));
+    if (!list.length) continue;
+    const h = el('h3', 'section');
+    h.append(el('span', null, c.icon), el('span', null, c.name));
+    const group = el('div', 'group');
+    for (const it of list) group.append(editRow(it));
+    box.append(h, group);
   }
-  if (!box.children.length) box.append(el('p', 'empty', 'Nada encontrado.'));
+  if (!box.children.length) {
+    const empty = el('div', 'empty-state');
+    empty.append(el('h3', null, 'Nada encontrado'), el('p', null, 'Prueba con otra palabra o crea un producto nuevo.'));
+    box.append(empty);
+  }
 }
 
 function editRow(it) {
-  const row = el('button', 'item' + (it.need ? ' in' : ''));
+  const row = el('button', 'row' + (it.need ? ' on' : ''));
   row.type = 'button';
-  const names = el('span', 'names');
-  names.append(el('span', 'es', it.es));
-  if (it.nl && it.nl.toLowerCase() !== it.es.toLowerCase()) names.append(el('span', 'nl', it.nl));
-  const mark = el('span', 'mark', it.need ? '✓' : '＋');
-  row.append(names, mark);
+  const tog = toggleDot(it.need);
+  row.append(namesOf(it), tog);
   row.addEventListener('click', () => {
     it.need = !it.need;
     it.done = false;
     it.carry = false;
     save();
-    row.classList.toggle('in', it.need);
-    mark.textContent = it.need ? '✓' : '＋';
-    $('#title').textContent = editTitle();
+    row.classList.toggle('on', it.need);
+    tog.replaceChildren(icon(it.need ? 'check' : 'plus'));
+    popIn(tog);
+    updateEditCount();
   });
   return row;
 }
 
-function editTitle() {
-  return 'Editar lista · ' + items.filter((i) => i.need).length;
-}
-
 // ---- Compra: un producto cada vez ----
-
-function catName(id) {
-  return (CATEGORIES.find((c) => c.id === id) || {}).name || '';
-}
 
 function aisleRank(it) {
   const r = SHOP_ORDER.indexOf(it.cat);
@@ -220,24 +308,44 @@ function renderCard(root, st) {
   const idx = st.seq.findIndex((i) => i.id === trip.cursor);
   const it = st.seq[idx];
   const isBought = idx < st.bought.length;
+  const c = catOf(it.cat);
 
   const top = el('div', 'shop-top');
-  top.append(
-    el('span', 'tag', catName(it.cat)),
-    button('counter', (idx + 1) + ' / ' + st.seq.length + ' ▾', () => { shopMode = 'overview'; render(); }));
+  const tag = tinted(el('span', 'tag'), c);
+  tag.append(el('span', null, c.icon), el('span', null, c.name));
+  const counter = button('counter', (idx + 1) + ' / ' + st.seq.length, () => { shopMode = 'overview'; enter = true; render(); }, null);
+  counter.append(icon('down'));
+  top.append(tag, counter);
 
-  const card = el('div', 'card' + (isBought ? ' bought' : '') + (slide ? ' slide-' + slide : ''));
+  const pct = st.seq.length ? Math.round((st.bought.length / st.seq.length) * 100) : 0;
+  const bar = el('div', 'progress');
+  const fill = el('div', 'fill');
+  fill.style.width = lastProgress + '%';
+  bar.append(fill);
+  requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.width = pct + '%'; }));
+  lastProgress = pct;
+
+  const card = tinted(el('div', 'card' + (isBought ? ' bought' : '') + (slide ? ' slide-' + slide : '')), c);
   slide = '';
-  card.append(el('div', 'big', it.es));
+  card.append(el('div', 'badge', c.icon), el('div', 'big', it.es));
   if (it.nl && it.nl.toLowerCase() !== it.es.toLowerCase()) card.append(el('div', 'bignl', it.nl));
-  if (isBought) card.append(el('div', 'check', '✓'));
+  if (isBought) {
+    const cb = el('div', 'check-badge');
+    cb.append(icon('check'));
+    card.append(cb);
+  }
+  card.append(el('div', 'hint', isBought
+    ? 'Doble toque para desmarcar'
+    : 'Doble toque para marcar · Desliza para navegar'));
   attachGestures(card, st, it, isBought);
 
   const actions = el('div', 'actions');
-  if (!isBought) actions.append(button('ghost', 'Posponer', () => postpone(st, it)));
-  actions.append(button('primary big-btn', isBought ? '↩ Desmarcar' : '✓ Comprado',
-    () => (isBought ? unmark(it) : markBought(st, it))));
-  root.append(top, card, actions);
+  if (!isBought) actions.append(button('btn secondary', 'Posponer', () => postpone(st, it), 'clock'));
+  actions.append(isBought
+    ? button('btn secondary', 'Desmarcar', () => unmark(it), null)
+    : button('btn primary', 'Comprado', () => markBought(st, it), 'check'));
+  if (isBought) actions.lastChild.style.flex = '1';
+  root.append(top, bar, card, actions);
 }
 
 function attachGestures(card, st, it, isBought) {
@@ -329,50 +437,75 @@ function recover(it) {
   render();
 }
 
-function listRow(it, mark, cls, onTap) {
-  const row = el('button', 'item ' + cls);
+function listRow(it, trailing, cls, onTap) {
+  const row = el('button', 'row ' + cls);
   row.type = 'button';
-  const names = el('span', 'names');
-  names.append(el('span', 'es', it.es));
-  if (it.nl && it.nl.toLowerCase() !== it.es.toLowerCase()) names.append(el('span', 'nl', it.nl));
-  row.append(names, el('span', 'mark', mark));
+  row.append(namesOf(it));
+  if (trailing) row.append(trailing);
   row.addEventListener('click', onTap);
   return row;
 }
 
 function renderOverview(root, st) {
-  const jump = (it) => () => { trip.cursor = it.id; shopMode = 'card'; saveTrip(); render(); };
-  const section = (title, list, mark, cls, onTap) => {
+  const large = el('div', 'large');
+  const n = st.seq.length;
+  large.append(el('h1', null, 'Lista completa'),
+    el('p', 'sub', st.bought.length + ' de ' + n + ' comprados'));
+  root.append(large);
+
+  const jump = (it) => () => { trip.cursor = it.id; shopMode = 'card'; enter = true; saveTrip(); render(); };
+  const section = (title, list, trailing, cls, onTap) => {
     if (!list.length) return;
-    root.append(el('h3', null, title + ' (' + list.length + ')'));
-    for (const it of list) root.append(listRow(it, mark, cls + (it.id === trip.cursor ? ' in' : ''), onTap(it)));
+    root.append(el('h3', 'section', title + ' · ' + list.length));
+    const group = el('div', 'group');
+    for (const it of list) {
+      group.append(listRow(it, trailing(it), cls + (it.id === trip.cursor ? ' current' : ''), onTap(it)));
+    }
+    root.append(group);
   };
-  section('Pendientes', st.pending, '', '', jump);
-  section('Comprados', st.bought, '✓', 'bought-row', jump);
-  section('Pospuestos', st.postponed, 'Recuperar', '', (it) => () => recover(it));
-  if (!st.seq.length && !st.postponed.length) root.append(el('p', 'empty', 'No hay nada en la lista.'));
-  root.append(button('primary finish', 'Terminar compra', () => finishTrip(st)));
+  section('Pendientes', st.pending, () => null, '', jump);
+  section('Comprados', st.bought, () => {
+    const t = el('span', 'toggle on');
+    t.append(icon('check'));
+    return t;
+  }, 'on', jump);
+  section('Pospuestos', st.postponed, () => el('span', 'pill', 'Recuperar'), '', (it) => () => recover(it));
+  if (!n && !st.postponed.length) {
+    const empty = el('div', 'empty-state');
+    empty.append(el('h3', null, 'No hay nada en la lista'));
+    root.append(empty);
+  }
+  root.append(button('btn primary wide finish', 'Terminar compra', () => finishTrip(st), 'check'));
 }
 
 function renderEnd(root, st) {
   const box = el('div', 'endbox');
+  const hero = el('div', 'hero');
   if (st.pending.length) {
-    box.append(el('p', 'msg', 'Has llegado al final.\nTe faltan ' + st.pending.length + ' productos.'));
-    box.append(button('primary', 'Ver pendientes', () => {
-      trip.cursor = st.pending[0].id; saveTrip(); render();
-    }));
+    hero.classList.add('soft');
+    hero.append(icon('list'));
+    box.append(hero, el('p', 'msg', 'Has llegado al final'),
+      el('p', 'lead', 'Te faltan ' + st.pending.length + (st.pending.length === 1 ? ' producto.' : ' productos.')),
+      button('btn primary', 'Ver pendientes', () => {
+        trip.cursor = st.pending[0].id; slide = 'prev'; saveTrip(); render();
+      }));
   } else if (st.bought.length) {
-    box.append(el('p', 'msg', '¡Todo comprado! 🎉'));
+    hero.append(icon('check'));
+    box.append(hero, el('p', 'msg', '¡Todo comprado!'), el('p', 'lead', 'Buen trabajo. Ya puedes ir a la caja.'));
   } else if (st.postponed.length) {
-    box.append(el('p', 'msg', 'Todo lo que queda está pospuesto.'));
-    box.append(button('primary', 'Ver pospuestos', () => { shopMode = 'overview'; render(); }));
+    hero.classList.add('soft');
+    hero.append(icon('clock'));
+    box.append(hero, el('p', 'msg', 'Solo quedan pospuestos'),
+      button('btn primary', 'Ver pospuestos', () => { shopMode = 'overview'; enter = true; render(); }));
   } else {
-    box.append(el('p', 'msg', 'La lista está vacía.'));
-    box.append(button('primary', 'Editar lista', () => go('edit')));
+    hero.classList.add('soft');
+    hero.append(icon('cart'));
+    box.append(hero, el('p', 'msg', 'La lista está vacía'),
+      button('btn primary', 'Editar lista', () => go('edit'), 'pencil'));
   }
   if (st.bought.length || st.postponed.length) {
-    box.append(button('ghost', 'Terminar compra', () => finishTrip(st)));
-    box.append(button('ghost', 'Ver lista completa', () => { shopMode = 'overview'; render(); }));
+    box.append(button('btn secondary', 'Terminar compra', () => finishTrip(st)));
+    box.append(button('btn text', 'Ver lista completa', () => { shopMode = 'overview'; enter = true; render(); }));
   }
   root.append(box);
 }
@@ -384,20 +517,24 @@ function finishTrip(st) {
   for (const it of st.postponed) it.carry = true;
   summary = { bought: st.bought.length, postponed: st.postponed.length, left: st.pending.length };
   trip = { bought: [], postponed: [], cursor: null };
+  lastProgress = 0;
   save();
   saveTrip();
   shopMode = 'card';
+  enter = true;
   hideToast();
   render();
 }
 
 function renderSummary(root) {
   const box = el('div', 'endbox');
-  box.append(el('p', 'msg', 'Compra terminada ✓'));
-  box.append(el('p', 'empty', summary.bought + ' comprados' +
-    (summary.postponed ? '\n' + summary.postponed + ' pospuestos: saldrán los primeros la próxima vez' : '') +
-    (summary.left ? '\n' + summary.left + ' sin comprar siguen en la lista' : '')));
-  box.append(button('primary', 'Volver al inicio', () => go('home')));
+  const hero = el('div', 'hero');
+  hero.append(icon('check'));
+  const lines = [summary.bought + (summary.bought === 1 ? ' comprado' : ' comprados')];
+  if (summary.postponed) lines.push(summary.postponed + ' pospuestos: saldrán los primeros la próxima vez');
+  if (summary.left) lines.push(summary.left + ' sin comprar siguen en la lista');
+  box.append(hero, el('p', 'msg', 'Compra terminada'), el('p', 'lead', lines.join('\n')),
+    button('btn primary', 'Volver al inicio', () => go('home')));
   root.append(box);
 }
 
@@ -439,19 +576,29 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowLeft') step(tripState(), -1);
 });
 
+// ---- Raíz ----
+
+function backLabel() {
+  if (view === 'edit') return 'Listo';
+  if (view === 'shop' && shopMode === 'overview') return 'Compra';
+  return 'Inicio';
+}
+
 function render() {
   const root = $('#content');
   root.replaceChildren();
-  root.className = view;
-  $('#back').hidden = view === 'home';
-  $('#title').textContent = view === 'edit' ? editTitle() : view === 'shop' ? 'Compra' : 'Compra Lovaina';
+  root.className = view + (enter ? ' enter' : '');
+  enter = false;
+  const back = $('#back');
+  back.hidden = view === 'home';
+  if (view !== 'home') back.replaceChildren(icon('chevron'), el('span', null, backLabel()));
   if (view === 'home') renderHome(root);
   else if (view === 'edit') renderEdit(root);
   else renderShop(root);
 }
 
 $('#back').addEventListener('click', () => {
-  if (view === 'shop' && shopMode === 'overview') { shopMode = 'card'; render(); }
+  if (view === 'shop' && shopMode === 'overview') { shopMode = 'card'; enter = true; render(); }
   else go('home');
 });
 
