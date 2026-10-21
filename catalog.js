@@ -1,3 +1,6 @@
+// Orden en que se recorre el súper en la pantalla de compra
+const SHOP_ORDER = ['fruta', 'pan', 'carne', 'lacteos', 'despensa', 'bebidas', 'limpieza'];
+
 // Catálogo inicial: [español, neerlandés]
 const CATEGORIES = [
   { id: 'fruta', name: 'Frutas y verduras', items: [
