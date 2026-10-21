@@ -1,5 +1,10 @@
-const CACHE = 'autolisting-v4';
-const FILES = ['./', 'index.html', 'style.css', 'catalog.js', 'app.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
+importScripts('emoji.js');
+
+const CACHE = 'autolisting-v5';
+const FILES = [
+  './', 'index.html', 'style.css', 'emoji.js', 'catalog.js', 'app.js', 'manifest.webmanifest',
+  'icon-180.png', 'icon-192.png', 'icon-512.png',
+].concat(EMOJI.map((e) => 'emoji/' + e[0] + '.png'));
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
@@ -15,7 +20,8 @@ self.addEventListener('activate', (e) => {
 
 // Red primero para recibir actualizaciones; si no hay conexión, caché.
 self.addEventListener('fetch', (e) => {
-  if (e.request.method !== 'GET') return;
+  const url = new URL(e.request.url);
+  if (e.request.method !== 'GET' || url.origin !== location.origin) return;
   e.respondWith(
     fetch(e.request)
       .then((res) => {

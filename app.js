@@ -1,10 +1,11 @@
-const STORE_KEY = 'autolisting.v1';
+const STORE_KEY = 'autolisting.v2';
+const OLD_STORE_KEY = 'autolisting.v1';
 let items = load();
 let view = 'home';
 let query = '';
 let enter = false;
 
-const TRIP_KEY = 'autolisting.trip.v1';
+const TRIP_KEY = 'autolisting.trip.v2';
 let trip = loadTrip();
 let shopMode = 'card';
 let summary = null;
@@ -18,16 +19,35 @@ function load() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORE_KEY));
     if (Array.isArray(saved)) return saved;
+    const old = JSON.parse(localStorage.getItem(OLD_STORE_KEY));
+    if (Array.isArray(old)) return migrate(old);
   } catch (e) {}
   return seed();
 }
 
 function seed() {
   const out = [];
-  for (const c of CATEGORIES) {
-    for (const [es, nl] of c.items) {
-      out.push({ id: c.id + '-' + es, es, nl, cat: c.id, need: false, done: false });
+  for (const z of ZONES) {
+    for (const [es, nl, emoji] of z.items) {
+      out.push({ id: z.id + '-' + es, es, nl, emoji, zone: z.id, need: false, done: false });
     }
+  }
+  return out;
+}
+
+// Pasa los datos de la versión anterior (categorías) a zonas con emoji.
+function migrate(old) {
+  const byEs = new Map(old.map((i) => [i.es, i]));
+  const out = seed().map((f) => {
+    const o = byEs.get(f.es);
+    return o ? Object.assign(f, { need: !!o.need, carry: !!o.carry }) : f;
+  });
+  for (const o of old) {
+    if (!o.custom) continue;
+    out.push({
+      id: o.id, es: o.es, nl: o.nl || '', custom: true, need: !!o.need, done: false, carry: !!o.carry,
+      zone: OLD_ZONES[o.cat] || o.cat, emoji: guessEmoji(o.es),
+    });
   }
   return out;
 }
@@ -72,6 +92,15 @@ function icon(name) {
   return s;
 }
 
+function emo(id, size) {
+  const i = document.createElement('img');
+  i.className = 'emo ' + (size || '');
+  i.src = emojiSrc(id || 'shopping_cart');
+  i.alt = '';
+  i.draggable = false;
+  return i;
+}
+
 function el(tag, cls, text) {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -88,10 +117,11 @@ function button(cls, text, onClick, iconName) {
   return b;
 }
 
-const catOf = (id) => CATEGORIES.find((c) => c.id === id) || { id, name: 'Otros', icon: '🛒', hue: 150 };
+const zoneOf = (id) =>
+  ZONES.find((z) => z.id === id) || { id, name: 'Otros', emoji: 'shopping_cart', hue: 150 };
 
-function tinted(node, cat) {
-  node.style.setProperty('--h', cat.hue);
+function tinted(node, zone) {
+  node.style.setProperty('--h', zone.hue);
   return node;
 }
 
@@ -152,14 +182,20 @@ function renderHome(root) {
     empty.append(hero, el('h3', null, 'Tu lista está vacía'), el('p', null, 'Toca «Editar» para añadir productos.'));
     scroll.append(empty);
   }
-  for (const c of CATEGORIES) {
-    const group = needed.filter((i) => i.cat === c.id);
+  for (const z of ZONES) {
+    const group = needed.filter((i) => i.zone === z.id);
     if (!group.length) continue;
-    const wrap = tinted(el('div', 'cat'), c);
+    const wrap = tinted(el('div', 'cat'), z);
     const label = el('div', 'cat-label');
-    label.append(el('span', 'dot', c.icon), el('span', null, c.name));
+    const dot = el('span', 'dot');
+    dot.append(emo(z.emoji, 'xs'));
+    label.append(dot, el('span', null, z.name));
     const chips = el('div', 'chips');
-    for (const it of group) chips.append(el('span', 'chip', it.es));
+    for (const it of group) {
+      const chip = el('span', 'chip');
+      chip.append(emo(it.emoji, 'xs'), el('span', null, it.es));
+      chips.append(chip);
+    }
     wrap.append(label, chips);
     scroll.append(wrap);
   }
@@ -170,12 +206,39 @@ function renderHome(root) {
     button('btn primary buy', active ? 'Continuar compra' : 'Compra', () => go('shop'), 'cart'));
 }
 
+// ---- Traducción automática (solo al crear un producto) ----
+
+async function translateToDutch(text) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    const url = 'https://api.mymemory.translated.net/get?q=' + encodeURIComponent(text) +
+      '&langpair=' + encodeURIComponent('es|nl');
+    const data = await (await fetch(url, { signal: ctrl.signal })).json();
+    const main = data && data.responseData && data.responseData.translatedText;
+    if (!main || /MYMEMORY|INVALID|QUERY LENGTH/i.test(main)) return '';
+    // La API mezcla corpus públicos con ruido ("i) groene olijven,"): limpiar y quedarse con el primero razonable.
+    const candidates = [main].concat((data.matches || []).map((m) => m.translation));
+    for (const raw of candidates) {
+      let t = String(raw).replace(/^\s*\w{1,3}\)\s*/, '').replace(/[\s.,;:!?]+$/, '').trim();
+      if (t.length > 3 && t === t.toUpperCase()) t = t.toLowerCase();
+      if (/^[A-Za-zÀ-ÿ' -]{2,40}$/.test(t)) return t.charAt(0).toUpperCase() + t.slice(1);
+    }
+    return '';
+  } catch (e) {
+    return '';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ---- Edición ----
 
 function renderEdit(root) {
   const large = el('div', 'large');
-  large.append(el('h1', null, 'Editar lista'), el('p', 'sub'));
-  large.lastChild.id = 'edit-count';
+  const sub = el('p', 'sub');
+  sub.id = 'edit-count';
+  large.append(el('h1', null, 'Editar lista'), sub);
   root.append(large);
 
   const bar = el('div', 'searchbar');
@@ -189,37 +252,95 @@ function renderEdit(root) {
   bar.append(search);
   root.append(bar);
 
-  const add = el('details', 'add');
-  const summ = el('summary');
-  const plus = toggleDot(false);
-  summ.append(plus, el('span', null, 'Producto nuevo'));
-  add.append(summ);
-  const form = el('form');
-  const es = el('input'); es.placeholder = 'Nombre'; es.required = true;
-  const nl = el('input'); nl.placeholder = 'Nederlands (opcional)';
-  const sel = el('select');
-  for (const c of CATEGORIES) {
-    const o = el('option', null, c.icon + '  ' + c.name); o.value = c.id; sel.append(o);
-  }
-  const submit = el('button', 'btn primary wide', 'Añadir a la lista');
-  submit.type = 'submit';
-  form.append(es, nl, sel, submit);
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const name = es.value.trim();
-    if (!name) return;
-    items.push({ id: 'u-' + Date.now(), es: name, nl: nl.value.trim(), cat: sel.value, need: true, done: false, custom: true });
-    save();
-    render();
-  });
-  add.append(form);
-  root.append(add);
+  root.append(newItemForm());
 
   const box = el('div');
   box.id = 'edit-list';
   root.append(box);
   renderEditList();
   updateEditCount();
+}
+
+function newItemForm() {
+  const add = el('details', 'add');
+  const summ = el('summary');
+  const plus = toggleDot(false);
+  plus.classList.add('on');
+  summ.append(plus, el('span', null, 'Producto nuevo'));
+  add.append(summ);
+
+  const form = el('form');
+  const es = el('input'); es.placeholder = 'Nombre'; es.required = true;
+  const nl = el('input'); nl.placeholder = 'Nederlands';
+  const note = el('p', 'note'); note.hidden = true;
+  const sel = el('select');
+  for (const z of ZONES) {
+    const o = el('option', null, z.name); o.value = z.id; sel.append(o);
+  }
+
+  const pickLabel = el('p', 'field-label', 'Icono');
+  const picker = el('div', 'picker');
+  const buttons = {};
+  let chosen = 'shopping_cart';
+  let pickedByUser = false;
+  const select = (id, scroll) => {
+    chosen = id;
+    for (const k in buttons) buttons[k].classList.toggle('sel', k === id);
+    const b = buttons[id];
+    if (scroll && b) picker.scrollTo({ left: b.offsetLeft - picker.clientWidth / 2 + b.offsetWidth / 2, behavior: 'smooth' });
+  };
+  for (const [id] of EMOJI) {
+    const b = el('button', 'pick');
+    b.type = 'button';
+    const img = emo(id);
+    img.loading = 'lazy';
+    b.append(img);
+    b.addEventListener('click', () => { pickedByUser = true; select(id, false); });
+    buttons[id] = b;
+    picker.append(b);
+  }
+  select(chosen);
+
+  let nlTouched = false;
+  let timer = null;
+  let ticket = 0;
+  es.addEventListener('input', () => {
+    clearTimeout(timer);
+    const text = es.value.trim();
+    if (!pickedByUser) select(guessEmoji(text), true);
+    if (nlTouched || text.length < 2) return;
+    timer = setTimeout(async () => {
+      const mine = ++ticket;
+      note.textContent = 'Traduciendo…';
+      note.hidden = false;
+      const t = await translateToDutch(text);
+      if (mine !== ticket || nlTouched) return;
+      if (t) {
+        nl.value = t;
+        note.textContent = 'Sugerencia automática · corrígela si hace falta';
+      } else {
+        note.hidden = true;
+      }
+    }, 700);
+  });
+  nl.addEventListener('input', () => { nlTouched = true; note.hidden = true; });
+
+  const submit = el('button', 'btn primary wide', 'Añadir a la lista');
+  submit.type = 'submit';
+  form.append(es, nl, note, sel, pickLabel, picker, submit);
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const name = es.value.trim();
+    if (!name) return;
+    items.push({
+      id: 'u-' + Date.now(), es: name, nl: nl.value.trim(), emoji: chosen,
+      zone: sel.value, need: true, done: false, custom: true,
+    });
+    save();
+    render();
+  });
+  add.append(form);
+  return add;
 }
 
 function updateEditCount() {
@@ -231,13 +352,13 @@ function updateEditCount() {
 function renderEditList() {
   const box = $('#edit-list');
   box.replaceChildren();
-  const q = query.trim().toLowerCase();
-  for (const c of CATEGORIES) {
+  const q = normalize(query.trim());
+  for (const z of ZONES) {
     const list = items.filter((i) =>
-      i.cat === c.id && (!q || i.es.toLowerCase().includes(q) || (i.nl || '').toLowerCase().includes(q)));
+      i.zone === z.id && (!q || normalize(i.es).includes(q) || normalize(i.nl || '').includes(q)));
     if (!list.length) continue;
     const h = el('h3', 'section');
-    h.append(el('span', null, c.icon), el('span', null, c.name));
+    h.append(emo(z.emoji, 'xs'), el('span', null, z.name));
     const group = el('div', 'group');
     for (const it of list) group.append(editRow(it));
     box.append(h, group);
@@ -253,7 +374,7 @@ function editRow(it) {
   const row = el('button', 'row' + (it.need ? ' on' : ''));
   row.type = 'button';
   const tog = toggleDot(it.need);
-  row.append(namesOf(it), tog);
+  row.append(emo(it.emoji, 'sm'), namesOf(it), tog);
   row.addEventListener('click', () => {
     it.need = !it.need;
     it.done = false;
@@ -269,16 +390,16 @@ function editRow(it) {
 
 // ---- Compra: un producto cada vez ----
 
-function aisleRank(it) {
-  const r = SHOP_ORDER.indexOf(it.cat);
-  return r < 0 ? SHOP_ORDER.length : r;
+function zoneRank(it) {
+  const r = ZONES.findIndex((z) => z.id === it.zone);
+  return r < 0 ? ZONES.length : r;
 }
 
-// Pospuestos de la compra anterior primero; después por pasillos.
+// Pospuestos de la compra anterior primero; después por zonas del súper.
 function inAisleOrder(list) {
   return list.slice().sort((a, b) =>
     (b.carry ? 1 : 0) - (a.carry ? 1 : 0) ||
-    aisleRank(a) - aisleRank(b) ||
+    zoneRank(a) - zoneRank(b) ||
     items.indexOf(a) - items.indexOf(b));
 }
 
@@ -308,11 +429,11 @@ function renderCard(root, st) {
   const idx = st.seq.findIndex((i) => i.id === trip.cursor);
   const it = st.seq[idx];
   const isBought = idx < st.bought.length;
-  const c = catOf(it.cat);
+  const z = zoneOf(it.zone);
 
   const top = el('div', 'shop-top');
-  const tag = tinted(el('span', 'tag'), c);
-  tag.append(el('span', null, c.icon), el('span', null, c.name));
+  const tag = tinted(el('span', 'tag'), z);
+  tag.append(emo(z.emoji, 'xs'), el('span', null, z.name));
   const counter = button('counter', (idx + 1) + ' / ' + st.seq.length, () => { shopMode = 'overview'; enter = true; render(); }, null);
   counter.append(icon('down'));
   top.append(tag, counter);
@@ -325,18 +446,17 @@ function renderCard(root, st) {
   requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.width = pct + '%'; }));
   lastProgress = pct;
 
-  const card = tinted(el('div', 'card' + (isBought ? ' bought' : '') + (slide ? ' slide-' + slide : '')), c);
+  const card = tinted(el('div', 'card' + (isBought ? ' bought' : '') + (slide ? ' slide-' + slide : '')), z);
   slide = '';
-  card.append(el('div', 'badge', c.icon), el('div', 'big', it.es));
+  const badge = el('div', 'badge');
+  badge.append(emo(it.emoji, 'lg'));
+  card.append(badge, el('div', 'big', it.es));
   if (it.nl && it.nl.toLowerCase() !== it.es.toLowerCase()) card.append(el('div', 'bignl', it.nl));
   if (isBought) {
     const cb = el('div', 'check-badge');
     cb.append(icon('check'));
     card.append(cb);
   }
-  card.append(el('div', 'hint', isBought
-    ? 'Doble toque para desmarcar'
-    : 'Doble toque para marcar · Desliza para navegar'));
   attachGestures(card, st, it, isBought);
 
   const actions = el('div', 'actions');
@@ -440,7 +560,7 @@ function recover(it) {
 function listRow(it, trailing, cls, onTap) {
   const row = el('button', 'row ' + cls);
   row.type = 'button';
-  row.append(namesOf(it));
+  row.append(emo(it.emoji, 'sm'), namesOf(it));
   if (trailing) row.append(trailing);
   row.addEventListener('click', onTap);
   return row;
@@ -602,6 +722,7 @@ $('#back').addEventListener('click', () => {
   else go('home');
 });
 
+save();
 render();
 
 if ('serviceWorker' in navigator) {
